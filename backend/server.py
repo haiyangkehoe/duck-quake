@@ -9,7 +9,7 @@ from urllib.request import urlopen
 
 import numpy as np
 from obspy.clients.seedlink.easyseedlink import EasySeedLinkClient
-from scipy.signal import butter, sosfiltfilt
+from scipy.signal import butter, sosfilt, sosfilt_zi
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,7 +45,7 @@ UPDATE_INTERVAL = 0.20
 
 BUFFER_SAMPLES = 6000
 
-FILTER_SAMPLE_RATE = 100.0
+FILTER_SAMPLE_RATE = 200.0
 
 
 # ============================================================
@@ -124,11 +124,9 @@ def fetch_station_metadata():
 
         return {}
 
-
     stations = {}
 
     lines = text.strip().splitlines()
-
 
     for line in lines:
 
@@ -138,13 +136,10 @@ def fetch_station_metadata():
         if line.startswith("#"):
             continue
 
-
         parts = line.split("|")
-
 
         if len(parts) < 8:
             continue
-
 
         try:
 
@@ -171,14 +166,11 @@ def fetch_station_metadata():
 
             continue
 
-
         if network != NETWORK:
             continue
 
-
         if not code.startswith("DUCK"):
             continue
-
 
         # Ignore stations whose metadata has ended.
 
@@ -193,7 +185,6 @@ def fetch_station_metadata():
                     )
                 )
 
-
                 if end_dt.tzinfo is None:
 
                     end_dt = (
@@ -201,7 +192,6 @@ def fetch_station_metadata():
                             tzinfo=timezone.utc
                         )
                     )
-
 
                 if (
                     end_dt.timestamp()
@@ -213,7 +203,6 @@ def fetch_station_metadata():
             except Exception:
 
                 pass
-
 
         stations[code] = {
 
@@ -232,14 +221,13 @@ def fetch_station_metadata():
             "start_time": start_time,
 
             "end_time": end_time,
-        }
 
+        }
 
     print(
         f"Found {len(stations)} active "
         "DuckQuake station(s)."
     )
-
 
     for code in sorted(stations):
 
@@ -250,7 +238,6 @@ def fetch_station_metadata():
             f"{station['latitude']:.6f}, "
             f"{station['longitude']:.6f}"
         )
-
 
     return stations
 
@@ -284,6 +271,13 @@ times = {}
 
 locks = {}
 
+# Persistent IIR filter state for each station.
+#
+# This allows the filter to continue seamlessly
+# from one SeedLink packet to the next.
+
+filter_states = {}
+
 
 def initialize_station(
     station
@@ -291,7 +285,6 @@ def initialize_station(
 
     if station in buffers:
         return
-
 
     buffers[station] = deque(
         maxlen=BUFFER_SAMPLES
@@ -302,6 +295,9 @@ def initialize_station(
     )
 
     locks[station] = threading.Lock()
+
+    # No filter state until the first packet arrives.
+    filter_states[station] = None
 
 
 for station in station_metadata:
@@ -328,69 +324,94 @@ class DuckQuakeClient(
             trace.stats.station
         )
 
-
         if station not in buffers:
 
             initialize_station(
                 station
             )
 
-
         if len(trace.data) == 0:
             return
-
 
         data = np.asarray(
             trace.data,
             dtype=float
         )
 
-
+        # Replace invalid samples.
         data[
             ~np.isfinite(data)
         ] = 0.0
 
+        # ----------------------------------------------------
+        # Stateful causal filtering
+        # ----------------------------------------------------
+        #
+        # Unlike sosfiltfilt(), this filter:
+        #
+        #   1. operates causally
+        #   2. does not require future samples
+        #   3. preserves filter state between packets
+        #
+        # This prevents each SeedLink packet from having
+        # independent filter startup/edge effects.
+        # ----------------------------------------------------
 
-        data = (
-            data -
-            np.mean(data)
-        )
+        try:
 
+            if filter_states[station] is None:
 
-        if len(data) > 30:
+                # Initialize the filter in its steady state
+                # based on the first sample.
 
-            try:
+                zi = (
+                    sosfilt_zi(sos)
+                    * data[0]
+                )
 
-                data = sosfiltfilt(
+                data, filter_states[station] = sosfilt(
                     sos,
-                    data
+                    data,
+                    zi=zi
                 )
 
-            except Exception as e:
+            else:
 
-                print(
-                    f"Filter error for "
-                    f"{station}: {e}"
+                data, filter_states[station] = sosfilt(
+                    sos,
+                    data,
+                    zi=filter_states[station]
                 )
 
-                return
+        except Exception as e:
 
+            print(
+                f"Filter error for "
+                f"{station}: {e}"
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # Timing
+        # ----------------------------------------------------
 
         start = (
             trace.stats.starttime
         )
 
-
         sample_rate = float(
             trace.stats.sampling_rate
         )
-
 
         dt = (
             1.0 /
             sample_rate
         )
 
+        # ----------------------------------------------------
+        # Append to continuous station buffer
+        # ----------------------------------------------------
 
         with locks[station]:
 
@@ -403,11 +424,9 @@ class DuckQuakeClient(
                     i * dt
                 )
 
-
                 times[
                     station
                 ].append(t)
-
 
                 buffers[
                     station
@@ -427,7 +446,6 @@ def start_seedlink():
 
         return
 
-
     try:
 
         print()
@@ -437,31 +455,25 @@ def start_seedlink():
             "SeedLink client..."
         )
 
-
         client = DuckQuakeClient(
             SEEDLINK_SERVER,
             autoconnect=False
         )
 
-
         client.conn.timeout = (
             SEEDLINK_TIMEOUT
         )
-
 
         print(
             "Connecting to EarthScope "
             f"SeedLink ({SEEDLINK_SERVER})..."
         )
 
-
         client.connect()
-
 
         print(
             "Connected to EarthScope SeedLink."
         )
-
 
         for station in sorted(
             station_metadata
@@ -473,26 +485,21 @@ def start_seedlink():
                 f"{CHANNEL}"
             )
 
-
             client.select_stream(
                 NETWORK,
                 station,
                 CHANNEL
             )
 
-
         print(
             "Selected all DuckQuake stations."
         )
-
 
         print(
             "Starting waveform stream..."
         )
 
-
         client.run()
-
 
     except Exception as e:
 
@@ -583,7 +590,6 @@ def get_station_data(
     if station not in buffers:
         return None
 
-
     with locks[station]:
 
         if len(
@@ -592,62 +598,50 @@ def get_station_data(
 
             return None
 
-
         t = np.asarray(
             times[station],
             dtype=float
         )
-
 
         data = np.asarray(
             buffers[station],
             dtype=float
         )
 
-
     if len(data) < 10:
         return None
 
-
     current_time = t[-1]
-
 
     waveform_start = (
         current_time -
         WINDOW_LENGTH
     )
 
-
     waveform_mask = (
         t >= waveform_start
     )
-
 
     waveform_t = (
         t[waveform_mask]
     )
 
-
     waveform_data = (
         data[waveform_mask]
     )
-
 
     rms_start = (
         current_time -
         RMS_WINDOW
     )
 
-
     rms_mask = (
         t >= rms_start
     )
 
-
     rms_data = (
         data[rms_mask]
     )
-
 
     if len(rms_data) > 0:
 
@@ -663,11 +657,9 @@ def get_station_data(
 
         rms = 0.0
 
-
     # Limit data sent to browser.
 
     MAX_POINTS = 1200
-
 
     if len(
         waveform_data
@@ -679,16 +671,13 @@ def get_station_data(
             MAX_POINTS
         ).astype(int)
 
-
         waveform_t = (
             waveform_t[indices]
         )
 
-
         waveform_data = (
             waveform_data[indices]
         )
-
 
     return {
 
@@ -703,6 +692,7 @@ def get_station_data(
 
         "waveform":
             waveform_data.tolist(),
+
     }
 
 
@@ -715,7 +705,6 @@ def status():
 
     result = {}
 
-
     for station in sorted(
         station_metadata
     ):
@@ -727,17 +716,16 @@ def status():
                 "samples": 0,
 
                 "latest_time": None,
+
             }
 
             continue
-
 
         with locks[station]:
 
             n = len(
                 buffers[station]
             )
-
 
             if n > 0:
 
@@ -751,15 +739,14 @@ def status():
 
                 latest_time = None
 
-
         result[station] = {
 
             "samples": n,
 
             "latest_time":
                 latest_time,
-        }
 
+        }
 
     return result
 
@@ -775,11 +762,9 @@ async def websocket_endpoint(
 
     await websocket.accept()
 
-
     print(
         "Browser connected to /ws"
     )
-
 
     try:
 
@@ -790,11 +775,10 @@ async def websocket_endpoint(
                 "time": None,
 
                 "stations": {}
+
             }
 
-
             station_times = []
-
 
             for station in sorted(
                 station_metadata
@@ -806,18 +790,15 @@ async def websocket_endpoint(
                     )
                 )
 
-
                 if result is not None:
 
                     payload[
                         "stations"
                     ][station] = result
 
-
                     station_times.append(
                         result["time"]
                     )
-
 
             if station_times:
 
@@ -825,16 +806,13 @@ async def websocket_endpoint(
                     station_times
                 )
 
-
             await websocket.send_json(
                 payload
             )
 
-
             await asyncio.sleep(
                 UPDATE_INTERVAL
             )
-
 
     except Exception as e:
 
@@ -862,14 +840,12 @@ if __name__ == "__main__":
 
     import os
 
-
     port = int(
         os.environ.get(
             "PORT",
             "8000"
         )
     )
-
 
     uvicorn.run(
         app,
