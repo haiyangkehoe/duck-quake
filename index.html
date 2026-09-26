@@ -1,12 +1,1516 @@
 <!DOCTYPE html>
+
 <html lang="en">
+
 <head>
+
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hello World</title>
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>DuckQuake</title>
+
+
+    <!-- ==================================================
+         Leaflet
+         ================================================== -->
+
+    <link
+        rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    >
+
+    <script
+        src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    ></script>
+
+
+    <style>
+
+        * {
+            box-sizing: border-box;
+        }
+
+
+        html,
+        body {
+
+            margin: 0;
+            padding: 0;
+
+            width: 100%;
+            height: 100%;
+
+            overflow: hidden;
+
+            font-family:
+                -apple-system,
+                BlinkMacSystemFont,
+                "Segoe UI",
+                sans-serif;
+
+            background: #111;
+
+            color: #eee;
+        }
+
+
+        /* ==================================================
+           Main layout
+           ================================================== */
+
+        #app {
+
+            width: 100%;
+            height: 100%;
+
+            display: flex;
+
+            flex-direction: column;
+        }
+
+
+        /* ==================================================
+           Header
+           ================================================== */
+
+        #header {
+
+            height: 56px;
+
+            display: flex;
+
+            align-items: center;
+
+            padding: 0 20px;
+
+            background: #181818;
+
+            border-bottom:
+                1px solid #333;
+
+            flex-shrink: 0;
+        }
+
+
+        #title {
+
+            font-size: 22px;
+
+            font-weight: 700;
+
+            letter-spacing: 0.5px;
+        }
+
+
+        #status {
+
+            margin-left: 20px;
+
+            font-size: 13px;
+
+            color: #888;
+        }
+
+
+        #status.connected {
+            color: #7bd88f;
+        }
+
+
+        #status.disconnected {
+            color: #e57373;
+        }
+
+
+        /* ==================================================
+           Main content
+           ================================================== */
+
+        #content {
+
+            flex: 1;
+
+            min-height: 0;
+
+            display: flex;
+
+            flex-direction: column;
+
+            padding: 12px;
+
+            gap: 12px;
+        }
+
+
+        /* ==================================================
+           Map
+           ================================================== */
+
+        #map-container {
+
+            position: relative;
+
+            flex: 0 0 45%;
+
+            min-height: 250px;
+
+            overflow: hidden;
+
+            border:
+                1px solid #333;
+
+            border-radius: 8px;
+
+            background: #222;
+        }
+
+
+        #map {
+
+            position: absolute;
+
+            inset: 0;
+        }
+
+
+        #map-overlay {
+
+            position: absolute;
+
+            top: 12px;
+            left: 12px;
+
+            padding: 7px 10px;
+
+            background:
+                rgba(0, 0, 0, 0.70);
+
+            border-radius: 5px;
+
+            font-size: 13px;
+
+            z-index: 1000;
+        }
+
+
+        /* ==================================================
+           Waveforms
+           ================================================== */
+
+        #waveforms {
+
+            flex: 1;
+
+            min-height: 0;
+
+            display: flex;
+
+            flex-direction: column;
+
+            gap: 8px;
+        }
+
+
+        .waveform-panel {
+
+            position: relative;
+
+            flex: 1;
+
+            min-height: 0;
+
+            border:
+                1px solid #333;
+
+            border-radius: 6px;
+
+            background: #181818;
+
+            overflow: hidden;
+        }
+
+
+        canvas {
+
+            display: block;
+
+            width: 100%;
+            height: 100%;
+        }
+
+
+        .waveform-label {
+
+            position: absolute;
+
+            left: 10px;
+            top: 7px;
+
+            z-index: 5;
+
+            font-size: 13px;
+
+            font-weight: 600;
+
+            pointer-events: none;
+
+            text-shadow:
+                0 1px 3px #000;
+        }
+
+
+        /* ==================================================
+           Footer
+           ================================================== */
+
+        #footer {
+
+            position: absolute;
+
+            right: 14px;
+            bottom: 8px;
+
+            font-size: 11px;
+
+            color: #777;
+
+            pointer-events: none;
+
+            z-index: 1000;
+        }
+
+    </style>
+
 </head>
-<footer>
-    <p>&#169; <script>document.write(new Date().getFullYear())</script></p>
-</footer>
+
+
+<body>
+
+
+<div id="app">
+
+
+    <div id="header">
+
+        <div id="title">
+            DuckQuake
+        </div>
+
+
+        <div
+            id="status"
+            class="disconnected"
+        >
+            Connecting...
+        </div>
+
+    </div>
+
+
+    <div id="content">
+
+
+        <div id="map-container">
+
+            <div id="map"></div>
+
+
+            <div id="map-overlay">
+                Autzen Stadium
+            </div>
+
+        </div>
+
+
+        <div id="waveforms"></div>
+
+    </div>
+
+
+    <div id="footer">
+        Live seismic measurements
+    </div>
+
+</div>
+
+
+<script>
+
+
+// ========================================================
+// Configuration
+// ========================================================
+
+const WINDOW_LENGTH = 30.0;
+
+const RMS_WINDOW = 5.0;
+
+
+// ========================================================
+// Environment
+// ========================================================
+//
+// Local:
+//     http://localhost:8080
+//
+// Production:
+//     https://duckquake.com
+//
+// No URL changes are necessary between them.
+// ========================================================
+
+const IS_LOCAL =
+    window.location.hostname ===
+        "localhost" ||
+    window.location.hostname ===
+        "127.0.0.1";
+
+
+const API_BASE =
+    IS_LOCAL
+        ? "http://localhost:8000"
+        : "";
+
+
+const WS_BASE =
+    IS_LOCAL
+        ? "ws://localhost:8000"
+        : (
+            window.location.protocol ===
+            "https:"
+                ? "wss://"
+                : "ws://"
+          ) +
+          window.location.host;
+
+
+// ========================================================
+// State
+// ========================================================
+
+let socket = null;
+
+let stationMetadata = {};
+
+let latestPayload = null;
+
+const stationMarkers = {};
+
+
+// ========================================================
+// Debug logging
+// ========================================================
+
+console.log(
+    "DuckQuake environment:",
+    IS_LOCAL
+        ? "LOCAL"
+        : "PRODUCTION"
+);
+
+console.log(
+    "API:",
+    API_BASE || "same origin"
+);
+
+console.log(
+    "WebSocket:",
+    WS_BASE
+);
+
+
+// ========================================================
+// Leaflet map
+// ========================================================
+
+const map =
+    L.map(
+        "map",
+        {
+            zoomControl: true
+        }
+    );
+
+
+L.tileLayer(
+    "https://server.arcgisonline.com/" +
+    "ArcGIS/rest/services/World_Imagery/" +
+    "MapServer/tile/{z}/{y}/{x}",
+    {
+
+        maxZoom: 22,
+
+        attribution:
+            "Imagery © Esri, Maxar, Earthstar " +
+            "Geographics, and the GIS User Community"
+
+    }
+).addTo(map);
+
+
+// Initial Autzen view.
+// This is only a fallback until station metadata loads.
+
+map.setView(
+    [
+        44.0583,
+        -123.0685
+    ],
+    18
+);
+
+
+// ========================================================
+// Station metadata
+// ========================================================
+
+async function loadStationMetadata() {
+
+    try {
+
+        const response =
+            await fetch(
+                API_BASE +
+                "/stations"
+            );
+
+
+        if (!response.ok) {
+
+            throw new Error(
+                "Station metadata request failed"
+            );
+
+        }
+
+
+        const result =
+            await response.json();
+
+
+        stationMetadata = {};
+
+
+        result.stations.forEach(
+            station => {
+
+                stationMetadata[
+                    station.code
+                ] = station;
+
+            }
+        );
+
+
+        console.log(
+            "Loaded stations:",
+            stationMetadata
+        );
+
+
+        createStationMarkers();
+
+        createWaveformPanels();
+
+
+    } catch (error) {
+
+        console.error(
+            "Could not load station metadata:",
+            error
+        );
+
+    }
+
+}
+
+
+// ========================================================
+// Station markers
+// ========================================================
+
+function createStationMarkers() {
+
+    Object.keys(
+        stationMarkers
+    ).forEach(
+        station => {
+
+            if (
+                !stationMetadata[
+                    station
+                ]
+            ) {
+
+                map.removeLayer(
+                    stationMarkers[
+                        station
+                    ]
+                );
+
+
+                delete stationMarkers[
+                    station
+                ];
+
+            }
+
+        }
+    );
+
+
+    Object.values(
+        stationMetadata
+    ).forEach(
+        station => {
+
+            if (
+                stationMarkers[
+                    station.code
+                ]
+            ) {
+
+                return;
+
+            }
+
+
+            const marker =
+                L.circleMarker(
+                    [
+                        station.latitude,
+                        station.longitude
+                    ],
+                    {
+
+                        radius: 10,
+
+                        color: "#ffffff",
+
+                        weight: 2,
+
+                        fillColor:
+                            "#e53935",
+
+                        fillOpacity: 0.9
+
+                    }
+                );
+
+
+            marker.bindTooltip(
+                station.code,
+                {
+                    direction: "top",
+
+                    offset: [
+                        0,
+                        -8
+                    ]
+                }
+            );
+
+
+            marker.bindPopup(
+                `
+                <strong>
+                    ${station.code}
+                </strong>
+                <br>
+                ${station.site_name || ""}
+                <br>
+                ${station.latitude.toFixed(6)},
+                ${station.longitude.toFixed(6)}
+                `
+            );
+
+
+            marker.addTo(map);
+
+
+            stationMarkers[
+                station.code
+            ] = marker;
+
+        }
+    );
+
+
+    const stations =
+        Object.values(
+            stationMetadata
+        );
+
+
+    if (
+        stations.length === 1
+    ) {
+
+        map.setView(
+            [
+                stations[0].latitude,
+                stations[0].longitude
+            ],
+            19
+        );
+
+
+    } else if (
+        stations.length > 1
+    ) {
+
+        const bounds =
+            L.latLngBounds(
+                stations.map(
+                    station => [
+                        station.latitude,
+                        station.longitude
+                    ]
+                )
+            );
+
+
+        map.fitBounds(
+            bounds,
+            {
+
+                padding: [
+                    60,
+                    60
+                ],
+
+                maxZoom: 19
+
+            }
+        );
+
+    }
+
+}
+
+
+// ========================================================
+// Waveform panels
+// ========================================================
+
+function createWaveformPanels() {
+
+    const container =
+        document.getElementById(
+            "waveforms"
+        );
+
+
+    const existingStations =
+        new Set(
+            Array.from(
+                container.children
+            ).map(
+                element =>
+                    element.dataset.station
+            )
+        );
+
+
+    Object.values(
+        stationMetadata
+    ).forEach(
+        station => {
+
+            if (
+                existingStations.has(
+                    station.code
+                )
+            ) {
+
+                return;
+
+            }
+
+
+            const panel =
+                document.createElement(
+                    "div"
+                );
+
+
+            panel.className =
+                "waveform-panel";
+
+
+            panel.dataset.station =
+                station.code;
+
+
+            const label =
+                document.createElement(
+                    "div"
+                );
+
+
+            label.className =
+                "waveform-label";
+
+
+            label.textContent =
+                station.code;
+
+
+            const canvas =
+                document.createElement(
+                    "canvas"
+                );
+
+
+            canvas.id =
+                "canvas-" +
+                station.code;
+
+
+            panel.appendChild(
+                label
+            );
+
+
+            panel.appendChild(
+                canvas
+            );
+
+
+            container.appendChild(
+                panel
+            );
+
+        }
+    );
+
+}
+
+
+// ========================================================
+// WebSocket
+// ========================================================
+
+function connect() {
+
+    const url =
+        WS_BASE +
+        "/ws";
+
+
+    console.log(
+        "Connecting to:",
+        url
+    );
+
+
+    setStatus(
+        "Connecting...",
+        false
+    );
+
+
+    socket =
+        new WebSocket(
+            url
+        );
+
+
+    socket.onopen =
+        function() {
+
+            console.log(
+                "WebSocket connected"
+            );
+
+
+            setStatus(
+                "Live",
+                true
+            );
+
+        };
+
+
+    socket.onclose =
+        function() {
+
+            console.log(
+                "WebSocket disconnected"
+            );
+
+
+            setStatus(
+                "Disconnected — retrying...",
+                false
+            );
+
+
+            setTimeout(
+                connect,
+                2000
+            );
+
+        };
+
+
+    socket.onerror =
+        function(error) {
+
+            console.error(
+                "WebSocket error:",
+                error
+            );
+
+        };
+
+
+    socket.onmessage =
+        function(event) {
+
+            const payload =
+                JSON.parse(
+                    event.data
+                );
+
+
+            latestPayload =
+                payload;
+
+
+            updateVisualization(
+                payload
+            );
+
+        };
+
+}
+
+
+// ========================================================
+// Status
+// ========================================================
+
+function setStatus(
+    text,
+    connected
+) {
+
+    const element =
+        document.getElementById(
+            "status"
+        );
+
+
+    element.textContent =
+        text;
+
+
+    element.classList.toggle(
+        "connected",
+        connected
+    );
+
+
+    element.classList.toggle(
+        "disconnected",
+        !connected
+    );
+
+}
+
+
+// ========================================================
+// Visualization
+// ========================================================
+
+function updateVisualization(
+    payload
+) {
+
+    if (
+        !payload.stations
+    ) {
+
+        return;
+
+    }
+
+
+    /*
+     * If the backend discovers a station that
+     * wasn't in our original metadata, reload
+     * metadata automatically.
+     */
+
+    Object.keys(
+        payload.stations
+    ).forEach(
+        station => {
+
+            if (
+                !stationMetadata[
+                    station
+                ]
+            ) {
+
+                loadStationMetadata();
+
+            }
+
+        }
+    );
+
+
+    let maxRMS = 0;
+
+
+    Object.keys(
+        payload.stations
+    ).forEach(
+        station => {
+
+            const data =
+                payload.stations[
+                    station
+                ];
+
+
+            maxRMS =
+                Math.max(
+                    maxRMS,
+                    data.rms || 0
+                );
+
+        }
+    );
+
+
+    Object.keys(
+        payload.stations
+    ).forEach(
+        station => {
+
+            const data =
+                payload.stations[
+                    station
+                ];
+
+
+            updateStationMarker(
+                station,
+                data.rms || 0,
+                maxRMS
+            );
+
+
+            drawWaveform(
+                station,
+                data
+            );
+
+        }
+    );
+
+}
+
+
+// ========================================================
+// Marker amplitude
+// ========================================================
+
+function updateStationMarker(
+    station,
+    rms,
+    maxRMS
+) {
+
+    const marker =
+        stationMarkers[
+            station
+        ];
+
+
+    if (!marker) {
+
+        return;
+
+    }
+
+
+    let normalized = 0;
+
+
+    if (
+        maxRMS > 0
+    ) {
+
+        normalized =
+            rms /
+            maxRMS;
+
+    }
+
+
+    const radius =
+        8 +
+        normalized *
+        22;
+
+
+    marker.setRadius(
+        radius
+    );
+
+}
+
+
+// ========================================================
+// Waveform
+// ========================================================
+
+function drawWaveform(
+    station,
+    stationData
+) {
+
+    const canvas =
+        document.getElementById(
+            "canvas-" +
+            station
+        );
+
+
+    if (!canvas) {
+
+        return;
+
+    }
+
+
+    const rect =
+        canvas.getBoundingClientRect();
+
+
+    if (
+        rect.width === 0 ||
+        rect.height === 0
+    ) {
+
+        return;
+
+    }
+
+
+    const dpr =
+        window.devicePixelRatio ||
+        1;
+
+
+    canvas.width =
+        rect.width *
+        dpr;
+
+
+    canvas.height =
+        rect.height *
+        dpr;
+
+
+    const ctx =
+        canvas.getContext(
+            "2d"
+        );
+
+
+    ctx.setTransform(
+        dpr,
+        0,
+        0,
+        dpr,
+        0,
+        0
+    );
+
+
+    const width =
+        rect.width;
+
+
+    const height =
+        rect.height;
+
+
+    ctx.clearRect(
+        0,
+        0,
+        width,
+        height
+    );
+
+
+    const time =
+        stationData.waveform_time;
+
+
+    const waveform =
+        stationData.waveform;
+
+
+    if (
+        !time ||
+        !waveform ||
+        waveform.length < 2
+    ) {
+
+        return;
+
+    }
+
+
+    let maxAmplitude = 0;
+
+
+    waveform.forEach(
+        value => {
+
+            maxAmplitude =
+                Math.max(
+                    maxAmplitude,
+                    Math.abs(value)
+                );
+
+        }
+    );
+
+
+    if (
+        maxAmplitude === 0
+    ) {
+
+        maxAmplitude = 1;
+
+    }
+
+
+    maxAmplitude *= 1.1;
+
+
+    // Grid
+
+    ctx.strokeStyle =
+        "#333";
+
+
+    ctx.lineWidth =
+        1;
+
+
+    ctx.beginPath();
+
+
+    ctx.moveTo(
+        0,
+        height / 2
+    );
+
+
+    ctx.lineTo(
+        width,
+        height / 2
+    );
+
+
+    ctx.stroke();
+
+
+    for (
+        let i = 1;
+        i < 6;
+        i++
+    ) {
+
+        const x =
+            width *
+            i /
+            6;
+
+
+        ctx.beginPath();
+
+
+        ctx.moveTo(
+            x,
+            0
+        );
+
+
+        ctx.lineTo(
+            x,
+            height
+        );
+
+
+        ctx.stroke();
+
+    }
+
+
+    // RMS window
+
+    const currentTime =
+        stationData.time;
+
+
+    const rmsStart =
+        currentTime -
+        RMS_WINDOW;
+
+
+    const waveformStart =
+        currentTime -
+        WINDOW_LENGTH;
+
+
+    const xRms =
+        (
+            rmsStart -
+            waveformStart
+        )
+        /
+        WINDOW_LENGTH *
+        width;
+
+
+    ctx.fillStyle =
+        "rgba(220, 50, 50, 0.12)";
+
+
+    ctx.fillRect(
+        xRms,
+        0,
+        width - xRms,
+        height
+    );
+
+
+    ctx.strokeStyle =
+        "rgba(220, 70, 70, 0.7)";
+
+
+    ctx.beginPath();
+
+
+    ctx.moveTo(
+        xRms,
+        0
+    );
+
+
+    ctx.lineTo(
+        xRms,
+        height
+    );
+
+
+    ctx.stroke();
+
+
+    // Waveform
+
+    ctx.strokeStyle =
+        "#eeeeee";
+
+
+    ctx.lineWidth =
+        1.2;
+
+
+    ctx.beginPath();
+
+
+    for (
+        let i = 0;
+        i < waveform.length;
+        i++
+    ) {
+
+        const x =
+            (
+                time[i] -
+                waveformStart
+            )
+            /
+            WINDOW_LENGTH *
+            width;
+
+
+        const y =
+            height / 2 -
+            (
+                waveform[i] /
+                maxAmplitude
+            )
+            *
+            (
+                height / 2 -
+                5
+            );
+
+
+        if (
+            i === 0
+        ) {
+
+            ctx.moveTo(
+                x,
+                y
+            );
+
+        } else {
+
+            ctx.lineTo(
+                x,
+                y
+            );
+
+        }
+
+    }
+
+
+    ctx.stroke();
+
+
+    // RMS line
+
+    const rms =
+        stationData.rms || 0;
+
+
+    const rmsY =
+        height / 2 -
+        (
+            rms /
+            maxAmplitude
+        )
+        *
+        (
+            height / 2 -
+            5
+        );
+
+
+    ctx.strokeStyle =
+        "#e53935";
+
+
+    ctx.lineWidth =
+        1.5;
+
+
+    ctx.beginPath();
+
+
+    ctx.moveTo(
+        xRms,
+        rmsY
+    );
+
+
+    ctx.lineTo(
+        width,
+        rmsY
+    );
+
+
+    ctx.stroke();
+
+
+    // Time labels
+
+    ctx.fillStyle =
+        "#777";
+
+
+    ctx.font =
+        "11px sans-serif";
+
+
+    ctx.textAlign =
+        "center";
+
+
+    for (
+        let i = 0;
+        i <= 6;
+        i++
+    ) {
+
+        const secondsAgo =
+            WINDOW_LENGTH *
+            (
+                1 -
+                i / 6
+            );
+
+
+        const x =
+            width *
+            i /
+            6;
+
+
+        ctx.fillText(
+            "-" +
+            secondsAgo.toFixed(0) +
+            " s",
+            x,
+            height - 5
+        );
+
+    }
+
+}
+
+
+// ========================================================
+// Resize
+// ========================================================
+
+window.addEventListener(
+    "resize",
+    function() {
+
+        if (
+            latestPayload
+        ) {
+
+            updateVisualization(
+                latestPayload
+            );
+
+        }
+
+    }
+);
+
+
+// ========================================================
+// Start
+// ========================================================
+
+loadStationMetadata();
+
+connect();
+
+</script>
+
+
 </body>
+
 </html>
