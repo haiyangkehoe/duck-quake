@@ -318,11 +318,6 @@
 
             <div id="map"></div>
 
-
-            <div id="map-overlay">
-                Autzen Stadium
-            </div>
-
         </div>
 
 
@@ -330,10 +325,6 @@
 
     </div>
 
-
-    <div id="footer">
-        Live seismic measurements
-    </div>
 
 </div>
 
@@ -348,6 +339,28 @@
 const WINDOW_LENGTH = 30.0;
 
 const RMS_WINDOW = 5.0;
+
+
+// ========================================================
+// Station RMS baseline configuration
+// ========================================================
+//
+// Each station is normalized against its own background
+// RMS rather than against the loudest station.
+//
+// This allows stations with naturally different noise
+// levels to have the same dot size under normal conditions.
+// ========================================================
+
+const RMS_BASELINE_WINDOW = 60.0;
+
+// Use the quietest 20% of recent RMS values to estimate
+// the station's normal background level.
+const RMS_BASELINE_PERCENTILE = 0.20;
+
+
+// Store recent RMS measurements for each station.
+const rmsHistory = {};
 
 
 // ========================================================
@@ -587,7 +600,7 @@ function createStationMarkers() {
                     ],
                     {
 
-                        radius: 10,
+                        radius: 8,
 
                         color: "#ffffff",
 
@@ -966,30 +979,6 @@ function updateVisualization(
     );
 
 
-    let maxRMS = 0;
-
-
-    Object.keys(
-        payload.stations
-    ).forEach(
-        station => {
-
-            const data =
-                payload.stations[
-                    station
-                ];
-
-
-            maxRMS =
-                Math.max(
-                    maxRMS,
-                    data.rms || 0
-                );
-
-        }
-    );
-
-
     Object.keys(
         payload.stations
     ).forEach(
@@ -1004,7 +993,7 @@ function updateVisualization(
             updateStationMarker(
                 station,
                 data.rms || 0,
-                maxRMS
+                data.time
             );
 
 
@@ -1020,13 +1009,142 @@ function updateVisualization(
 
 
 // ========================================================
+// RMS baseline
+// ========================================================
+
+function updateRMSHistory(
+    station,
+    rms,
+    time
+) {
+
+    if (
+        !Number.isFinite(rms) ||
+        rms <= 0
+    ) {
+
+        return;
+
+    }
+
+
+    if (
+        !rmsHistory[
+            station
+        ]
+    ) {
+
+        rmsHistory[
+            station
+        ] = [];
+
+    }
+
+
+    rmsHistory[
+        station
+    ].push(
+        {
+            time: time,
+            rms: rms
+        }
+    );
+
+
+    const cutoff =
+        time -
+        RMS_BASELINE_WINDOW;
+
+
+    rmsHistory[
+        station
+    ] =
+        rmsHistory[
+            station
+        ].filter(
+            entry =>
+                entry.time >= cutoff
+        );
+
+}
+
+
+// ========================================================
+// Get station-specific RMS baseline
+// ========================================================
+
+function getRMSBaseline(
+    station
+) {
+
+    const history =
+        rmsHistory[
+            station
+        ];
+
+
+    if (
+        !history ||
+        history.length === 0
+    ) {
+
+        return null;
+
+    }
+
+
+    const values =
+        history
+            .map(
+                entry =>
+                    entry.rms
+            )
+            .filter(
+                value =>
+                    Number.isFinite(
+                        value
+                    ) &&
+                    value > 0
+            )
+            .sort(
+                (a, b) =>
+                    a - b
+            );
+
+
+    if (
+        values.length === 0
+    ) {
+
+        return null;
+
+    }
+
+
+    const index =
+        Math.floor(
+            (
+                values.length - 1
+            ) *
+            RMS_BASELINE_PERCENTILE
+        );
+
+
+    return values[
+        index
+    ];
+
+}
+
+
+// ========================================================
 // Marker amplitude
 // ========================================================
 
 function updateStationMarker(
     station,
     rms,
-    maxRMS
+    time
 ) {
 
     const marker =
@@ -1042,18 +1160,77 @@ function updateStationMarker(
     }
 
 
-    let normalized = 0;
+    /*
+     * Add the latest RMS to this station's
+     * rolling history.
+     */
 
+    updateRMSHistory(
+        station,
+        rms,
+        time
+    );
+
+
+    /*
+     * Determine this station's own background RMS.
+     */
+
+    const baseline =
+        getRMSBaseline(
+            station
+        );
+
+
+    /*
+     * Until enough RMS history exists,
+     * keep the marker at its normal size.
+     */
 
     if (
-        maxRMS > 0
+        !baseline ||
+        baseline <= 0
     ) {
 
-        normalized =
-            rms /
-            maxRMS;
+        marker.setRadius(
+            8
+        );
+
+        return;
 
     }
+
+
+    /*
+     * Compare current RMS to this station's
+     * own background RMS.
+     */
+
+    const relativeRMS =
+        rms /
+        baseline;
+
+
+    /*
+     * Convert relative RMS to marker size.
+     *
+     * 1x baseline = 8 px
+     * 2x baseline = ~15 px
+     * 3x baseline = ~23 px
+     * 4x baseline = 30 px
+     * >4x baseline = capped at 30 px
+     */
+
+    const normalized =
+        Math.max(
+            0,
+            Math.min(
+                1,
+                (
+                    relativeRMS - 1
+                ) / 3
+            )
+        );
 
 
     const radius =
