@@ -336,7 +336,7 @@
 // Configuration
 // ========================================================
 
-const WINDOW_LENGTH = 120.0;
+const WINDOW_LENGTH = 30.0;
 
 const RMS_WINDOW = 5.0;
 
@@ -352,7 +352,7 @@ const RMS_WINDOW = 5.0;
 // levels to have the same dot size under normal conditions.
 // ========================================================
 
-const RMS_BASELINE_WINDOW = 120.0;
+const RMS_BASELINE_WINDOW = 60.0;
 
 // Use the quietest 20% of recent RMS values to estimate
 // the station's normal background level.
@@ -361,8 +361,6 @@ const RMS_BASELINE_PERCENTILE = 0.20;
 
 // Store recent RMS measurements for each station.
 const rmsHistory = {};
-
-const waveformHistory = {};
 
 
 // ========================================================
@@ -947,21 +945,50 @@ function updateVisualization(
     payload
 ) {
 
-    if (!payload.stations) {
+    if (
+        !payload.stations
+    ) {
+
         return;
+
     }
 
-    Object.keys(payload.stations).forEach(
+
+    /*
+     * If the backend discovers a station that
+     * wasn't in our original metadata, reload
+     * metadata automatically.
+     */
+
+    Object.keys(
+        payload.stations
+    ).forEach(
         station => {
-            if (!stationMetadata[station]) {
+
+            if (
+                !stationMetadata[
+                    station
+                ]
+            ) {
+
                 loadStationMetadata();
+
             }
+
         }
     );
 
-    Object.keys(payload.stations).forEach(
+
+    Object.keys(
+        payload.stations
+    ).forEach(
         station => {
-            const data = payload.stations[station];
+
+            const data =
+                payload.stations[
+                    station
+                ];
+
 
             updateStationMarker(
                 station,
@@ -969,24 +996,17 @@ function updateVisualization(
                 data.time
             );
 
-            updateWaveformHistory(
+
+            drawWaveform(
                 station,
                 data
             );
 
-            const history = waveformHistory[station];
-
-            drawWaveform(
-                station,
-                {
-                    ...data,
-                    waveform_time: history.time,
-                    waveform: history.data
-                }
-            );
         }
     );
+
 }
+
 
 // ========================================================
 // RMS baseline
@@ -1229,59 +1249,6 @@ function updateStationMarker(
 // ========================================================
 // Waveform
 // ========================================================
-
-function updateWaveformHistory(
-    station,
-    stationData
-) {
-    if (
-        !waveformHistory[station] ||
-        stationData.full
-    ) {
-        waveformHistory[station] = {
-            time: [],
-            data: []
-        };
-    }
-
-    const history = waveformHistory[station];
-
-    const incomingTime =
-        stationData.waveform_time || [];
-
-    const incomingData =
-        stationData.waveform || [];
-
-    for (
-        let i = 0;
-        i < incomingData.length;
-        i++
-    ) {
-        history.time.push(incomingTime[i]);
-        history.data.push(incomingData[i]);
-    }
-
-    if (history.time.length === 0) {
-        return;
-    }
-
-    const cutoff =
-        stationData.time - WINDOW_LENGTH;
-
-    let first = 0;
-
-    while (
-        first < history.time.length &&
-        history.time[first] < cutoff
-    ) {
-        first++;
-    }
-
-    if (first > 0) {
-        history.time = history.time.slice(first);
-        history.data = history.data.slice(first);
-    }
-}
 
 function drawWaveform(
     station,

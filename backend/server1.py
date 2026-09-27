@@ -34,19 +34,16 @@ FDSN_STATION_URL = (
     "fdsnws/station/1/query"
 )
 
-WINDOW_LENGTH = 120.0
+WINDOW_LENGTH = 30.0
 RMS_WINDOW = 5.0
 
 FILTER_LOW = 1.0
 FILTER_HIGH = 10.0
 FILTER_ORDER = 4
 
-UPDATE_INTERVAL = 0.50
+UPDATE_INTERVAL = 0.20
 
-OUTPUT_SAMPLE_RATE = 40.0
-DECIMATION_FACTOR = 5
-
-BUFFER_SAMPLES = int(WINDOW_LENGTH * OUTPUT_SAMPLE_RATE)
+BUFFER_SAMPLES = 6000
 
 FILTER_SAMPLE_RATE = 200.0
 
@@ -68,17 +65,6 @@ sos = butter(
     FILTER_ORDER,
     [FILTER_LOW, FILTER_HIGH],
     btype="bandpass",
-    fs=FILTER_SAMPLE_RATE,
-    output="sos",
-)
-
-ANTI_ALIAS_CUTOFF = 10.0
-ANTI_ALIAS_ORDER = 8
-
-anti_alias_sos = butter(
-    ANTI_ALIAS_ORDER,
-    ANTI_ALIAS_CUTOFF,
-    btype="lowpass",
     fs=FILTER_SAMPLE_RATE,
     output="sos",
 )
@@ -291,8 +277,6 @@ locks = {}
 # from one SeedLink packet to the next.
 
 filter_states = {}
-anti_alias_states = {}
-decimation_phases = {}
 
 
 def initialize_station(
@@ -314,8 +298,6 @@ def initialize_station(
 
     # No filter state until the first packet arrives.
     filter_states[station] = None
-    anti_alias_states[station] = None
-    decimation_phases[station] = 0
 
 
 for station in station_metadata:
@@ -338,89 +320,119 @@ class DuckQuakeClient(
         trace
     ):
 
-        station = trace.stats.station
+        station = (
+            trace.stats.station
+        )
 
         if station not in buffers:
-            initialize_station(station)
+
+            initialize_station(
+                station
+            )
 
         if len(trace.data) == 0:
             return
 
-        data = np.asarray(trace.data, dtype=float)
-        data[~np.isfinite(data)] = 0.0
+        data = np.asarray(
+            trace.data,
+            dtype=float
+        )
+
+        # Replace invalid samples.
+        data[
+            ~np.isfinite(data)
+        ] = 0.0
+
+        # ----------------------------------------------------
+        # Stateful causal filtering
+        # ----------------------------------------------------
+        #
+        # Unlike sosfiltfilt(), this filter:
+        #
+        #   1. operates causally
+        #   2. does not require future samples
+        #   3. preserves filter state between packets
+        #
+        # This prevents each SeedLink packet from having
+        # independent filter startup/edge effects.
+        # ----------------------------------------------------
 
         try:
-            # Stateful 1–10 Hz bandpass.
+
             if filter_states[station] is None:
-                zi = sosfilt_zi(sos) * data[0]
-                data, filter_states[station] = sosfilt(
-                    sos, data, zi=zi
+
+                # Initialize the filter in its steady state
+                # based on the first sample.
+
+                zi = (
+                    sosfilt_zi(sos)
+                    * data[0]
                 )
+
+                data, filter_states[station] = sosfilt(
+                    sos,
+                    data,
+                    zi=zi
+                )
+
             else:
+
                 data, filter_states[station] = sosfilt(
                     sos,
                     data,
                     zi=filter_states[station]
                 )
 
-            # Stateful anti-alias low-pass before 8:1 decimation.
-            if anti_alias_states[station] is None:
-                zi = sosfilt_zi(anti_alias_sos) * data[0]
-                data, anti_alias_states[station] = sosfilt(
-                    anti_alias_sos,
-                    data,
-                    zi=zi
-                )
-            else:
-                data, anti_alias_states[station] = sosfilt(
-                    anti_alias_sos,
-                    data,
-                    zi=anti_alias_states[station]
-                )
-
         except Exception as e:
-            print(f"Filter error for {station}: {e}")
-            return
 
-        start = trace.stats.starttime
-        sample_rate = float(trace.stats.sampling_rate)
-
-        if abs(sample_rate - FILTER_SAMPLE_RATE) > 1e-6:
             print(
-                f"Unexpected sample rate for {station}: "
-                f"{sample_rate} Hz (expected {FILTER_SAMPLE_RATE} Hz)"
+                f"Filter error for "
+                f"{station}: {e}"
             )
+
             return
 
-        # Keep the decimation phase continuous across packets.
-        phase = decimation_phases[station]
+        # ----------------------------------------------------
+        # Timing
+        # ----------------------------------------------------
 
-        first_index = (
-            DECIMATION_FACTOR - phase
-        ) % DECIMATION_FACTOR
-
-        indices = np.arange(
-            first_index,
-            len(data),
-            DECIMATION_FACTOR,
-            dtype=int
+        start = (
+            trace.stats.starttime
         )
 
-        decimation_phases[station] = (
-            phase + len(data)
-        ) % DECIMATION_FACTOR
+        sample_rate = float(
+            trace.stats.sampling_rate
+        )
 
-        if len(indices) == 0:
-            return
+        dt = (
+            1.0 /
+            sample_rate
+        )
 
-        output_data = data[indices]
-        dt = 1.0 / sample_rate
+        # ----------------------------------------------------
+        # Append to continuous station buffer
+        # ----------------------------------------------------
 
         with locks[station]:
-            for i, value in zip(indices, output_data):
-                t = float(start + i * dt)
-                times[station].append(t)
-                buffers[station].append(float(value))
+
+            for i, value in enumerate(
+                data
+            ):
+
+                t = float(
+                    start +
+                    i * dt
+                )
+
+                times[
+                    station
+                ].append(t)
+
+                buffers[
+                    station
+                ].append(
+                    float(value)
+                )
 
 
 def start_seedlink():
@@ -572,49 +584,115 @@ def get_stations():
 # ============================================================
 
 def get_station_data(
-    station,
-    after_time=None
+    station
 ):
+
     if station not in buffers:
         return None
 
     with locks[station]:
-        if len(buffers[station]) == 0:
+
+        if len(
+            buffers[station]
+        ) == 0:
+
             return None
 
-        t = np.asarray(times[station], dtype=float)
-        data = np.asarray(buffers[station], dtype=float)
+        t = np.asarray(
+            times[station],
+            dtype=float
+        )
+
+        data = np.asarray(
+            buffers[station],
+            dtype=float
+        )
 
     if len(data) < 10:
         return None
 
-    current_time = float(t[-1])
+    current_time = t[-1]
 
-    if after_time is None:
-        mask = t >= current_time - WINDOW_LENGTH
-    else:
-        mask = t > after_time
-
-    waveform_t = t[mask]
-    waveform_data = data[mask]
-
-    rms_data = data[
-        t >= current_time - RMS_WINDOW
-    ]
-
-    rms = (
-        float(np.sqrt(np.mean(rms_data ** 2)))
-        if len(rms_data) > 0
-        else 0.0
+    waveform_start = (
+        current_time -
+        WINDOW_LENGTH
     )
 
+    waveform_mask = (
+        t >= waveform_start
+    )
+
+    waveform_t = (
+        t[waveform_mask]
+    )
+
+    waveform_data = (
+        data[waveform_mask]
+    )
+
+    rms_start = (
+        current_time -
+        RMS_WINDOW
+    )
+
+    rms_mask = (
+        t >= rms_start
+    )
+
+    rms_data = (
+        data[rms_mask]
+    )
+
+    if len(rms_data) > 0:
+
+        rms = float(
+            np.sqrt(
+                np.mean(
+                    rms_data ** 2
+                )
+            )
+        )
+
+    else:
+
+        rms = 0.0
+
+    # Limit data sent to browser.
+
+    MAX_POINTS = 1200
+
+    if len(
+        waveform_data
+    ) > MAX_POINTS:
+
+        indices = np.linspace(
+            0,
+            len(waveform_data) - 1,
+            MAX_POINTS
+        ).astype(int)
+
+        waveform_t = (
+            waveform_t[indices]
+        )
+
+        waveform_data = (
+            waveform_data[indices]
+        )
+
     return {
-        "time": current_time,
-        "rms": rms,
-        "sample_rate": OUTPUT_SAMPLE_RATE,
-        "waveform_time": waveform_t.tolist(),
-        "waveform": waveform_data.tolist(),
-        "full": after_time is None,
+
+        "time":
+            current_time,
+
+        "rms":
+            rms,
+
+        "waveform_time":
+            waveform_t.tolist(),
+
+        "waveform":
+            waveform_data.tolist(),
+
     }
 
 
@@ -681,42 +759,66 @@ def status():
 async def websocket_endpoint(
     websocket: WebSocket
 ):
+
     await websocket.accept()
 
-    print("Browser connected to /ws")
-
-    # Cursor is per browser connection.
-    station_cursors = {}
+    print(
+        "Browser connected to /ws"
+    )
 
     try:
+
         while True:
+
             payload = {
+
                 "time": None,
+
                 "stations": {}
+
             }
 
             station_times = []
 
-            for station in sorted(station_metadata):
-                result = get_station_data(
-                    station,
-                    station_cursors.get(station)
+            for station in sorted(
+                station_metadata
+            ):
+
+                result = (
+                    get_station_data(
+                        station
+                    )
                 )
 
                 if result is not None:
-                    payload["stations"][station] = result
-                    station_times.append(result["time"])
-                    station_cursors[station] = result["time"]
+
+                    payload[
+                        "stations"
+                    ][station] = result
+
+                    station_times.append(
+                        result["time"]
+                    )
 
             if station_times:
-                payload["time"] = max(station_times)
 
-            await websocket.send_json(payload)
+                payload["time"] = max(
+                    station_times
+                )
 
-            await asyncio.sleep(UPDATE_INTERVAL)
+            await websocket.send_json(
+                payload
+            )
+
+            await asyncio.sleep(
+                UPDATE_INTERVAL
+            )
 
     except Exception as e:
-        print(f"WebSocket disconnected: {e}")
+
+        print(
+            f"WebSocket disconnected: {e}"
+        )
 
 
 # ============================================================
