@@ -14,6 +14,7 @@ from scipy.signal import butter, sosfilt, sosfilt_zi
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 import uvicorn
 
@@ -524,6 +525,7 @@ app = FastAPI(
     title="DuckQuake API"
 )
 
+app.mount("/img", StaticFiles(directory="img"), name="img")
 
 app.add_middleware(
     CORSMiddleware,
