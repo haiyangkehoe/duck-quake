@@ -268,60 +268,49 @@
            ================================================== */
 
         #footer {
-
-            height: 56px;
-
+            width: 100%;
+            box-sizing: border-box;
+        
             display: flex;
-
-            align-items: center;
-
             justify-content: center;
-
-            padding: 0 20px;
-
+            align-items: center;
+        
+            padding: 8px 15px;
+        
             background: #181818;
-
-            border-top:
-                1px solid #333;
-
+            border-bottom: 1px solid #333;
+        
             flex-shrink: 0;
         }
-
-
+        
         #footer-links {
-
-            display: flex;
-
+            width: 100%;
+            max-width: 500px;
+        
+            display: grid;
+            grid-template-columns: 1fr;
             align-items: center;
-
+            justify-items: center;
+        
+            gap: 5px;
+        }
+        
+        #footer-links a {
+            min-width: 0;
+            width: 100%;
+        
+            display: flex;
             justify-content: center;
-
-            gap: 50px;
-
+            align-items: center;
         }
         
-        #footer-links #pnsn-logo {
-
-            height: 40px;
-
+        #pnsn-logo,
+        #uo-erth-logo,
+        #ohaz-logo {
             width: auto;
-
-        }
-
-        #footer-links #ohaz-logo {
-
-            height: 40px;
-
-            width: auto;
-
-        }
-        
-        #footer-links #uo-erth-logo {
-
-            height: 40px;
-
-            width: auto;
-
+            height: clamp(24px, 10vw, 40px);
+            max-width: 100%;
+            display: block;
         }
 
     </style>
@@ -370,19 +359,21 @@
 
        <div id="footer-links">
 
+           <!--
            <a href="https://pnsn.org/" target="_blank">
 
                <img id="pnsn-logo" src="img/primary-white.svg" alt="PNSN">
 
            </a>
 
-           <a href="https://ohaz.uoregon.edu" target="_blank">
+           <a href="https://ohaz.uoregon.edu/" target="_blank">
 
                <img id="ohaz-logo" src="img/Ohaz_Logo_lrg_font_Y.png" alt="OHAZ">
 
            </a>
+           -->
 
-           <a href="https://naturalsciences.uoregon.edu/earth-sciences" target="_blank">
+           <a href="https://naturalsciences.uoregon.edu/earth-sciences/" target="_blank">
 
                <img id="uo-erth-logo" src="img/EarthSciences_hlk.svg" alt="UO Earth Sciences">
 
